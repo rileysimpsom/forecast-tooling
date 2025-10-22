@@ -1,13 +1,15 @@
-# Use the official Apache Airflow image for Airflow 2.9.2 and Python 3.10
+# 1. BASE IMAGE
+# We use an official Airflow image based on Python 3.10
+# This matches the Python version from the original Astro Runtime (3.0-5)
 FROM apache/airflow:2.9.2-python3.10
 
 # Set the AIRFLOW_USER_HOME (good practice)
 ENV AIRFLOW_HOME=/opt/airflow
 
-# Switch to root user (USER 0) to install system dependencies
+# 2. SYSTEM PACKAGES
+# Switch to root user to install packages
 USER 0
-
-# Install the system dependencies from your original Dockerfile
+# Install system packages needed for ML libraries (from your original Dockerfile)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -16,12 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements before anything else for better layer caching
+# 3. PYTHON PACKAGES
+# Copy your main requirements.txt file
 COPY requirements.txt /requirements.txt
 
-# Install all Python packages from requirements.txt
-# Add "apache-airflow-providers-*" because the base image
-# doesn't include all providers like astro-runtime does.
+# Install providers Airflow needs, then install all your project's packages
 RUN pip install --no-cache-dir \
     "apache-airflow-providers-common-sql" \
     "apache-airflow-providers-postgres" \
@@ -30,15 +31,11 @@ RUN pip install --no-cache-dir \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.2/constraints-3.10.txt" \
     && pip install --no-cache-dir -r /requirements.txt
 
-# Copy your packages.txt if you have one (optional)
-# COPY packages.txt /packages.txt
-# RUN apt-get update && xargs -a /packages.txt apt-get install -y && apt-get clean
-
-# Copy the rest of your project files
+# 4. COPY PROJECT
+# Copy the rest of your project files into the container
 COPY . /opt/airflow
 
+# 5. FINAL SETUP
 # Switch back to the non-privileged airflow user
 USER airflow
-
-# Set the working directory
 WORKDIR /opt/airflow
