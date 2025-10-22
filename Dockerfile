@@ -9,7 +9,6 @@ ENV AIRFLOW_HOME=/opt/airflow
 # 2. SYSTEM PACKAGES
 # Switch to root user to install packages
 USER 0
-# Install system packages needed for ML libraries (from your original Dockerfile)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     git \
@@ -19,6 +18,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # 3. PYTHON PACKAGES
+
+# Switch to airflow user to run correct packages
+USER airflow
 # Copy your main requirements.txt file
 COPY requirements.txt /requirements.txt
 
@@ -27,7 +29,7 @@ RUN pip install --no-cache-dir \
     "apache-airflow-providers-common-sql" \
     "apache-airflow-providers-postgres" \
     "apache-airflow-providers-sqlite" \
-    "apache-airflow-providers-aws" \
+    "apache-airflow-providers-amazon" \
     --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.9.2/constraints-3.10.txt" \
     && pip install --no-cache-dir -r /requirements.txt
 
