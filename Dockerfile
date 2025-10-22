@@ -33,6 +33,7 @@ RUN pip install --no-cache-dir \
 
 # 4. COPY PROJECT
 # Copy the rest of your project files into the container
+# This .dockerignore file will skip .venv, .git, etc.
 COPY . /opt/airflow
 
 # 5. FINAL SETUP
