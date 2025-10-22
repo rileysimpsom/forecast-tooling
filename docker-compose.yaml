@@ -109,7 +109,7 @@ services:
   # ML & APP SERVICES (MinIO, MLflow, Streamlit)
   # ------------------------------------------------------------------
   minio:
-    image: minio/minio:RELEASE.2023-09-07T22-05-25Z
+    image: minio/minio:latest
     container_name: minio
     environment:
       - MINIO_ROOT_USER=minioadmin
@@ -132,7 +132,7 @@ services:
     command: >
       -c "
       echo 'Waiting for MinIO...';
-      until /usr/bin/mc config host add minio_local http://minio:9G00 minioadmin minioadmin; do sleep 1; done;
+      until /usr/bin/mc config host add minio_local http://minio:9000 minioadmin minioadmin; do sleep 1; done;
       echo 'Creating buckets...';
       /usr/bin/mc mb minio_local/mlflow || true;
       /usr/bin/mc mb minio_local/airflow-logs || true;
