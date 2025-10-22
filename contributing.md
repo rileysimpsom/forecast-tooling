@@ -1,3 +1,0 @@
-- Branches: main (protected), develop, feature/*, hotfix/*
-- Conventional Commits: feat:, fix:, docs:, test:, ci:, chore:
-- Open PRs to merge into main; CI must be green
