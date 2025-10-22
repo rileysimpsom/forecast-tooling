@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy requirements from the ROOT folder (one level up)
 # This ensures both Airflow and Streamlit use the *exact same* package versions
-COPY ../requirements.txt .
+COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
