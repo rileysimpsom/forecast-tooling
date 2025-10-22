@@ -1,0 +1,200 @@
+version: '3.8'
+
+x-airflow-common:
+  &airflow-common
+  build: .
+  image: open-source-sales-forecasting:latest
+  environment:
+    - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    - AIRFLOW__MLFLOW__TRACKING_URI=http://mlflow:5000
+    - AIRFLOW_CONN_MINIO_DEFAULT=aws://minio_access_key:minio_secret_key@?host=http://minio:9000
+    - AWS_DEFAULT_REGION=us-east-1  # <--- ADD THIS
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./include:/opt/airflow/include
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  depends_on:
+    - postgres
+    - airflow-init
+  networks:
+    - airflow-net
+services:
+  # ------------------------------------------------------------------
+  # AIRFLOW SERVICES
+  # ------------------------------------------------------------------
+  postgres:
+    image: postgres:14
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - airflow-db-volume:/var/lib/postgresql/data
+    networks:
+      - airflow-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        # Wait for Postgres to be healthy
+        until pg_isready -h postgres -p 5432 -U airflow; do
+          echo "Waiting for PostgreSQL...";
+          sleep 2;
+        done;
+        # Init the Airflow DB (runs only once)
+        airflow db init;
+        # Create an admin user (admin/admin)
+        airflow users create \
+          --username admin \
+          --password admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com || true;
+        # Create the MinIO connection Airflow will use
+        airflow connections add 'minio_default' \
+          --conn-type 'aws' \
+          --conn-login 'minio_access_key' \
+          --conn-password 'minio_secret_key' \
+          --conn-extra '{"host": "http://minio:9000", "region_name": "us-east-1"}' || true;
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: airflow webserver
+    ports:
+      - "8080:8080" # Airflow UI
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: airflow scheduler
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname $(hostname)"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    command: airflow triggerer
+    restart: always
+
+  # ------------------------------------------------------------------
+  # ML & APP SERVICES (MLflow, MinIO, Streamlit)
+  # ------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2023-09-07T22-05-25Z
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=minio_access_key
+      - MINIO_ROOT_PASSWORD=minio_secret_key
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # MinIO API
+      - "9001:9001" # MinIO UI
+    volumes:
+      - minio-data-volume:/data
+    networks:
+      - airflow-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  create-minio-buckets:
+    image: minio/mc
+    container_name: create-minio-buckets
+    depends_on:
+      - minio
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      echo 'Waiting for MinIO...';
+      until /usr/bin/mc config host add minio_local http://minio:9000 minio_access_key minio_secret_key; do sleep 1; done;
+      echo 'Creating buckets...';
+      /usr/bin/mc mb minio_local/mlflow || true;
+      /usr/bin/mc mb minio_local/airflow-logs || true;
+      echo 'Buckets created.';
+      "
+    networks:
+      - airflow-net
+    restart: "no"
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow
+    environment:
+      # Use Postgres as the backend store
+      - MLFLOW_POSTGRES_HOST=postgres
+      - MLFLOW_POSTGRES_PORT=5432
+      - MLFLOW_POSTGRES_USER=airflow
+      - MLFLOW_POSTGRES_PASSWORD=airflow
+      - MLFLOW_POSTGRES_DB=airflow
+      # Use MinIO as the artifact store
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minio_access_key
+      - AWS_SECRET_ACCESS_KEY=minio_secret_key
+      - AWS_DEFAULT_REGION=us-east-1
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri postgresql://${MLFLOW_POSTGRES_USER}:${MLFLOW_POSTGRES_PASSWORD}@${MLFLOW_POSTGRES_HOST}:${MLFLOW_POSTGRES_PORT}/${MLFLOW_POSTGRES_DB}
+      --default-artifact-root s3://mlflow/
+    ports:
+      - "5000:5000" # MLflow UI
+    depends_on:
+      - postgres
+      - create-minio-buckets
+    networks:
+      - airflow-net
+    restart: always
+
+  streamlit:
+    build:
+      context: ./streamlit_app # Assumes your Streamlit code is in 'streamlit_app'
+      dockerfile: Dockerfile
+    container_name: streamlit
+    environment:
+      # Tell Streamlit where to find the MLflow server
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - AWS_DEFAULT_REGION=us-east-1
+    command: streamlit run app.py --server.port 8501
+    ports:
+      - "8501:8501" # Streamlit UI
+    volumes:
+      - ./streamlit_app:/app
+    depends_on:
+      - mlflow
+    networks:
+      - airflow-net
+    restart: always
+
+volumes:
+  airflow-db-volume:
+  minio-data-volume:
+
+networks:
+  airflow-net:
+    driver: bridge
